@@ -38,6 +38,31 @@ def navier_stokes_3D_pipe(re=60):
         laplace_u = u_xx + u_yy + u_zz
         laplace_v = v_xx + v_yy + v_zz
         laplace_w = w_xx + w_yy + w_zz
+        # (
+        #     u_x,
+        #     v_x,
+        #     w_x,
+        #     p_x,
+        # ) = unpack(num_diff_random(model, arg, f, torch.tensor([[1, 0, 0]])))
+        # (
+        #     u_y,
+        #     v_y,
+        #     w_y,
+        #     p_y,
+        # ) = unpack(num_diff_random(model, arg, f, torch.tensor([[0, 1, 0]])))
+        # (
+        #     u_z,
+        #     v_z,
+        #     w_z,
+        #     p_z,
+        # ) = unpack(num_diff_random(model, arg, f, torch.tensor([[0, 0, 1]])))
+
+        # (
+        #     laplace_u,
+        #     laplace_v,
+        #     laplace_w,
+        #     laplace_p,
+        # ) = unpack(num_laplace(model, arg, f))
 
         eq1 = u * u_x + v * u_y + w * u_z + p_x - iRe * laplace_u
         eq2 = u * v_x + v * v_y + w * v_z + p_y - iRe * laplace_v
