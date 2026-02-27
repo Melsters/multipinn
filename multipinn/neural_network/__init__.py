@@ -8,3 +8,5 @@ from .inference_wrapper import Inference
 from .pirate_net import PirateNet
 from .random_weight_factorization import FactorizedDense, FactorizedFNN
 from .residual_neural_network import ResNet
+from .FastKAN import KAN
+from .ChebyKAN import ChebyKAN
