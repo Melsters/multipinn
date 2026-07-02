@@ -117,6 +117,10 @@ def test_get_residual_extra(condition_extra, mock_model):
 
 def test_condition_extra_generator_for_normals(mock_geometry):
     points = torch.tensor([[0.1, 0.2]])
-    mock_geometry.boundary_normal.asaert_called_once_with(
-        points.detach().cpu().numpy()
-    )  # Ensures the function was called correctly
+    gen = ConditionExtra.generator_for_normals(mock_geometry)
+
+    normals = gen(points)
+
+    mock_geometry.boundary_normal.assert_called_once_with(
+        points.detach().cpu().numpy())
+    assert normals.device == points.device
