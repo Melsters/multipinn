@@ -7,8 +7,7 @@ The repository contains reusable components for defining PDE-based problems, gen
 
 The **canonical getting-started tutorial** for installation and the first run is:
 
-- [`docs/guide/getting_started.ipynb`](docs/guide/getting_started.ipynb)
-- GitHub-rendered version: `https://github.com/multipinn/multipinn/blob/main/docs/guide/getting_started.ipynb`
+- [`docs/guide/getting-started.ipynb`](docs/guide/getting-started.ipynb)
 
 This README and the notebook above are intentionally synchronized.  
 For all user-facing instructions, use the following common baseline:
@@ -36,7 +35,7 @@ examples/<example_name>/
 examples/<example_name>/configs/config.yaml
 examples/<example_name>/problem.py
 examples/<example_name>/run_train.py
-docs/guide/getting_started.ipynb
+docs/guide/getting-started.ipynb
 tests/
 ```
 
@@ -123,10 +122,12 @@ python -m examples.regression_1D.run_train \
   trainer.num_epochs=5 \
   generator.domain_points=256 \
   visualization.grid_plot_points=256 \
-  visualization.save_period=10 \
+  visualization.save_period=1 \
   visualization.save_mode=html \
   paths.save_dir=./artifacts_smoke/regression_1D
 ```
+After the smoke test completes successfully, the `artifacts_smoke/regression_1D` directory should contain not only `Used_config.yaml` but also the HTML visualization, loss plot functions, and model checkpoints. If you only need a minimal import check without generating artifacts, use the command from the "Installation Verification" section.
+
 
 ## First full example
 
@@ -242,7 +243,7 @@ make test
 4. Run tests locally.
 5. Open a pull request with a concise description of the change.
 
-When you add or change user-facing behavior, update the corresponding documentation as well — at minimum this README and `docs/guide/getting_started.ipynb`.
+When you add or change user-facing behavior, update the corresponding documentation as well — at minimum this README and `docs/guide/getting-started.ipynb`.
 
 ## Documentation policy for installation
 
@@ -250,7 +251,7 @@ To avoid contradictory instructions across the repository, use the following rul
 
 - keep the installation command as `pip install -e .`
 - keep the supported Python range as `3.8–3.11`
-- keep `docs/guide/getting_started.ipynb` as the main tutorial
+- keep `docs/guide/getting-started.ipynb` as the main tutorial
 - treat `make install` only as a shorthand for `pip install -e .`
 - do not introduce alternative installation paths as the primary workflow unless they are synchronized here first
 
