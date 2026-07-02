@@ -27,6 +27,7 @@ def mock_generator():
 @pytest.fixture
 def mock_model():
     model = Mock()
+    model.parameters.return_value = iter([torch.nn.Parameter(torch.zeros(1))])
     return model
 
 
