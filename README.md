@@ -193,7 +193,7 @@ This avoids extra browser requirements for Plotly image export.
 ## Notes for GNN and mesh examples
 
 The base installation already includes `torch_geometric` from `requirements.txt`.  
-However, some graph- and mesh-based workflows can additionally depend on PyG binary packages such as:
+However, some graph- and mesh-based workflows can additionally depend on [PyG binary packages](https://data.pyg.org/whl/) such as:
 
 - `pyg_lib`
 - `torch_scatter`
