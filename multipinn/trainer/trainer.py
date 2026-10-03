@@ -128,6 +128,7 @@ class Trainer:
         Finally updates model parameters using accumulated gradients.
         """
         self.optimizer.zero_grad()  # out of the loop to accumulate gradients
+        self._prepare_loss()
             
         for self.current_batch in range(self.num_batches):
             self.pinn.select_batch(self.current_batch)
@@ -135,14 +136,15 @@ class Trainer:
             if self.mixed_training:
                 with torch.amp.autocast('cuda'):
                     batch_loss, losses = self.calc_loss(self)
-                self.scaler.scale(batch_loss).backward()
+                self.scaler.scale(batch_loss * self.inum_batches).backward()
             else:
                 batch_loss, losses = self.calc_loss(self)
-                batch_loss.backward()
+                (batch_loss * self.inum_batches).backward()
                 
             self.epoch_loss_detailed += losses.detach()
             self.total_loss += batch_loss.detach()
             
+        self._step_loss()
         if self.mixed_training:
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -151,6 +153,17 @@ class Trainer:
             
         self.epoch_loss_detailed *= self.inum_batches
         self.total_loss *= self.inum_batches
+
+    def _prepare_loss(self):
+        prepare = getattr(self.calc_loss, "prepare_for_batches", None)
+        if prepare is not None:
+            prepare(self)
+
+    def _step_loss(self):
+        step = getattr(self.calc_loss, "step", None)
+        if step is not None:
+            scaler = self.scaler if self.mixed_training else None
+            step(scaler)
 
     @staticmethod
     def sum_of_means_calc_loss(self: "Trainer"):
@@ -219,6 +232,7 @@ class TrainerMultiGPU(Trainer):
     def _train_batches(self):
         """Process batches in distributed training mode."""
         self.optimizer.zero_grad()
+        self._prepare_loss()
         self.pinn.select_batch(self.rank)
         
         if self.mixed_training:
@@ -226,12 +240,14 @@ class TrainerMultiGPU(Trainer):
                 batch_loss, losses = self.calc_loss(self)
             self.scaler.scale(batch_loss).backward()
             self.reduce_gradients()
+            self._step_loss()
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             batch_loss, losses = self.calc_loss(self)
             batch_loss.backward()
             self.reduce_gradients()
+            self._step_loss()
             self.optimizer.step()
         
         self.epoch_loss_detailed += losses.detach()
@@ -322,16 +338,19 @@ class TrainerOneBatch(Trainer):
         """
         self.pinn.select_batch(0)
         self.optimizer.zero_grad()
+        self._prepare_loss()
         
         if self.mixed_training:
             with torch.amp.autocast('cuda'):
                 batch_loss, losses = self.calc_loss(self)
             self.scaler.scale(batch_loss).backward()
+            self._step_loss()
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             batch_loss, losses = self.calc_loss(self)
             batch_loss.backward()
+            self._step_loss()
             self.optimizer.step()
             
         self.epoch_loss_detailed += losses.detach()
