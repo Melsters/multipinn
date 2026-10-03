@@ -1,7 +1,12 @@
 import torch
+import torch.distributed as dist
 from torch import nn
 
 from .basic import BasicLosses
+
+
+def _ddp_active() -> bool:
+    return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
 
 
 class AdaptiveWeightSum(nn.Module):
@@ -27,18 +32,24 @@ class AdaptiveWeightSum(nn.Module):
         self,
         initial_weights,
         lr: float = 1e-3,
+        device=None,
+        sync_across_ranks: bool = False,
     ):
         super().__init__()
         self.lr = lr
-        self.weight = torch.as_tensor(initial_weights, dtype=torch.float32).detach()
-        self.train_weight = nn.Parameter(torch.log(self.weight))
+        self.sync_across_ranks = sync_across_ranks
+        weight = torch.as_tensor(initial_weights, dtype=torch.float32)
+        if device is not None:
+            weight = weight.to(device)
+        self.weight = weight.detach()
+        self.train_weight = nn.Parameter(torch.log(self.weight.clamp(min=1e-12)))
         self.optimizer = torch.optim.Adam(
             params=(self.train_weight,), lr=self.lr, maximize=True, weight_decay=1e-6
         )
 
     def forward(self, x: torch.Tensor):
         """
-        Forward pass that updates weights and computes the weighted sum.
+        Forward pass that computes the weighted sum.
 
         Args:
             x (torch.Tensor): Input tensor containing individual loss terms to be weighted.
@@ -48,7 +59,6 @@ class AdaptiveWeightSum(nn.Module):
         """
         if self.train_weight.device != x.device:
             self.to(x.device)
-        self.__update_weight()
         return self.__weight_sum(x)
 
     def __weight_sum(self, x: torch.Tensor):
@@ -64,12 +74,32 @@ class AdaptiveWeightSum(nn.Module):
         self.weight = torch.softmax(self.train_weight, dim=0)
         return torch.sum(x * self.weight)
 
-    def __update_weight(self):
-        """
-        Update the adaptive weights using the optimizer.
-        """
-        self.optimizer.step()
+    def step(self, scaler=None):
+        if self.train_weight.grad is None:
+            return
+        if self.sync_across_ranks:
+            self._all_reduce_grad()
+        if scaler is None:
+            self.optimizer.step()
+        else:
+            scaler.step(self.optimizer)
         self.optimizer.zero_grad()
+        if self.sync_across_ranks:
+            self._broadcast_train_weight()
+        with torch.no_grad():
+            self.weight = torch.softmax(self.train_weight, dim=0)
+
+    def _all_reduce_grad(self) -> None:
+        if not _ddp_active() or self.train_weight.grad is None:
+            return
+        dist.all_reduce(self.train_weight.grad, op=dist.ReduceOp.SUM)
+        self.train_weight.grad /= dist.get_world_size()
+
+    def _broadcast_train_weight(self) -> None:
+        if not _ddp_active():
+            return
+        with torch.no_grad():
+            dist.broadcast(self.train_weight, src=0)
 
 
 class AdaptiveConditionsLosses(BasicLosses):
@@ -134,7 +164,10 @@ class AdaptiveConditionsLosses(BasicLosses):
             tuple[torch.Tensor, torch.Tensor]: Total loss and detached individual losses.
         """
         mean_losses, counts = trainer.pinn.calculate_loss_and_count()
-        self.adaptive_cond = AdaptiveWeightSum(counts, self.lr)
+        device = mean_losses[0].device
+        self.adaptive_cond = AdaptiveWeightSum(
+            counts, self.lr, device=device, sync_across_ranks=True
+        )
         return self.weight_sum(mean_losses)
 
     def weight_sum(self, mean_losses):
@@ -150,6 +183,10 @@ class AdaptiveConditionsLosses(BasicLosses):
 
         total_loss = self.adaptive_cond(torch.stack(mean_losses))
         return total_loss, torch.stack(mean_losses).detach()
+
+    def step(self, scaler=None):
+        if self.adaptive_cond is not None:
+            self.adaptive_cond.step(scaler)
 
 
 class AdaptiveConditionsAndPointsLosses(AdaptiveConditionsLosses):
@@ -172,60 +209,32 @@ class AdaptiveConditionsAndPointsLosses(AdaptiveConditionsLosses):
     ):
         super().__init__(lr)
         self.adaptive_points = tuple()
+        self._adaptive_points_by_batch = {}
+        self._points_epoch = None
 
     def __call__(self, trainer: "Trainer"):
-        """
-        Computes total loss, updating point and condition weights at specified intervals.
-
-        If the current epoch is a multiple of update_grid_every, reinitializes adaptive points.
-        Otherwise, computes losses using current adaptive weights.
-
-        Args:
-            trainer (Trainer): Trainer instance with current epoch and PINN model.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Total loss and detached individual losses.
-        """
-        if trainer.current_epoch % trainer.update_grid_every == 0:
-            return self.__first_launch(trainer)
-        return self.__calc_losses(trainer)
-
-    def __calc_losses(self, trainer: "Trainer"):
-        """
-        Computes weighted losses using current adaptive weights for points and conditions.
-
-        Args:
-            trainer (Trainer): The PINN trainer instance.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Total loss and detached individual losses.
-        """
         losses = []
         for cond in trainer.pinn.conditions:
             losses += trainer.pinn.condition_loss(cond)
-
-        return self.__weight_points(losses)
-
-    def __first_launch(self, trainer: "Trainer"):
-        """
-        Initializes adaptive weights for both conditions and points during first launch or grid update.
-
-        Args:
-            trainer (Trainer): The PINN trainer instance.
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Total loss and detached individual losses after initialization.
-        """
-        losses = []
-        for cond in trainer.pinn.conditions:
-            losses += trainer.pinn.condition_loss(cond)
-
-        self.adaptive_points = tuple(
-            AdaptiveWeightSum(torch.ones_like(c), self.lr) for c in losses
-        )
+        if (
+            trainer.current_epoch % trainer.update_grid_every == 0
+            and self._points_epoch != trainer.current_epoch
+        ):
+            self._adaptive_points_by_batch = {}
+            self._points_epoch = trainer.current_epoch
+        batch_index = getattr(trainer, "rank", trainer.current_batch)
+        if batch_index not in self._adaptive_points_by_batch:
+            self._adaptive_points_by_batch[batch_index] = tuple(
+                AdaptiveWeightSum(torch.ones_like(loss), self.lr, device=loss.device)
+                for loss in losses
+            )
+        self.adaptive_points = self._adaptive_points_by_batch[batch_index]
         if self.adaptive_cond is None:
             counts = [len(x) for x in losses]
-            self.adaptive_cond = AdaptiveWeightSum(counts, self.lr)
+            device = losses[0].device
+            self.adaptive_cond = AdaptiveWeightSum(
+                counts, self.lr, device=device, sync_across_ranks=True
+            )
         return self.__weight_points(losses)
 
     def __weight_points(self, losses):
@@ -240,3 +249,9 @@ class AdaptiveConditionsAndPointsLosses(AdaptiveConditionsLosses):
         """
         mean_losses = [self.adaptive_points[i](loss) for i, loss in enumerate(losses)]
         return self.weight_sum(mean_losses)
+
+    def step(self, scaler=None):
+        for adaptive_points in self._adaptive_points_by_batch.values():
+            for adaptive_point in adaptive_points:
+                adaptive_point.step(scaler)
+        super().step(scaler)

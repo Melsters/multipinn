@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from .basic import BasicLosses
 
@@ -10,36 +11,57 @@ class NormalLosses(BasicLosses):
         self.alpha = alpha
 
     def __call__(self, trainer):
-        """
-        Calculate regularization param and return losses multiply on it
-        Requirement: First loss must relate to inner area.
-        """
         losses = trainer.pinn.calculate_loss()
-        losses_true = losses.copy()
         if len(trainer.pinn.conditions) != len(losses):
             raise Exception("Regularization does not supported system ODE")
-
-        if self.lambda_regularization is None:
-            self.lambda_regularization = torch.ones(
-                (len(losses) - 1), device=losses[0].device
-            )
-
-        last_layers = list(list(trainer.pinn.model.children())[-1].children())[-1]
-        losses[0].backward(retain_graph=True)
-        var_f = torch.std(last_layers.weight.grad.detach())
-        trainer.optimizer.zero_grad()
-
-        for ind, los in enumerate(losses[1:]):
-            los.backward(retain_graph=True)
-            var = torch.std(last_layers.weight.grad.detach())
-            regularization = var_f / var
-            trainer.optimizer.zero_grad()
-            regularization = (1 - self.alpha) * self.lambda_regularization[
-                ind
-            ] + self.alpha * regularization
-            losses[ind + 1] = los * regularization
-            self.lambda_regularization[ind] = regularization
+        weighted_losses = [losses[0]]
+        for ind, loss in enumerate(losses[1:]):
+            weighted_losses.append(loss * self.lambda_regularization[ind])
         return (
-            torch.sum(torch.stack(losses, dim=0)),
-            torch.stack(losses_true, dim=0).detach(),
+            torch.sum(torch.stack(weighted_losses)),
+            torch.stack(losses).detach(),
         )
+
+    def prepare_for_batches(self, trainer):
+        last_layer = list(list(trainer.pinn.model.children())[-1].children())[-1]
+        weight = last_layer.weight
+        distributed = (
+            dist.is_available()
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+            and hasattr(trainer, "rank")
+        )
+        batch_indices = (
+            (trainer.rank,) if distributed else range(trainer.num_batches)
+        )
+        divisor = dist.get_world_size() if distributed else trainer.num_batches
+        gradient_sums = None
+
+        for batch_index in batch_indices:
+            trainer.pinn.select_batch(batch_index)
+            losses = trainer.pinn.calculate_loss()
+            if len(trainer.pinn.conditions) != len(losses):
+                raise Exception("Regularization does not supported system ODE")
+            if gradient_sums is None:
+                gradient_sums = [torch.zeros_like(weight) for _ in losses]
+            for loss_index, loss in enumerate(losses):
+                gradient = torch.autograd.grad(
+                    loss, weight, retain_graph=True
+                )[0]
+                gradient_sums[loss_index].add_(gradient.detach())
+
+        if distributed:
+            for gradient_sum in gradient_sums:
+                dist.all_reduce(gradient_sum, op=dist.ReduceOp.SUM)
+
+        mean_gradients = [gradient_sum / divisor for gradient_sum in gradient_sums]
+        var_f = torch.std(mean_gradients[0])
+        proposed = torch.stack(
+            [var_f / torch.std(gradient) for gradient in mean_gradients[1:]]
+        )
+        if self.lambda_regularization is None:
+            self.lambda_regularization = torch.ones_like(proposed)
+        self.lambda_regularization = (
+            (1 - self.alpha) * self.lambda_regularization
+            + self.alpha * proposed
+        ).detach()
