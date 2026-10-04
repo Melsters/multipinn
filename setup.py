@@ -13,7 +13,7 @@ setup(
     # Basic info
     name="multipinn",
     version="1.0.0",
-    packages=find_packages(exclude=("tests*")),
+    packages=find_packages(exclude=['tests', 'tests.*', 'multipinn_paper_experiments', 'multipinn_paper_experiments.*']),
     author="LabADT",
     author_email="chermentsgoev@yandex.ru",
     url="https://mca.nsu.ru/labadt",
