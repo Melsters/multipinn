@@ -180,7 +180,7 @@ def num_diff_second_cross(
     f_minus_minus = model(arg - step1 - step2)
 
     return __four_point_scheme(
-        f_plus_plus, f_plus_minus, f_minus_plus, f_minus_minus, eps1 * eps2
+        f_plus_plus, f_plus_minus, f_minus_plus, f_minus_minus, 4 * eps1 * eps2
     )
 
 def num_laplace(
