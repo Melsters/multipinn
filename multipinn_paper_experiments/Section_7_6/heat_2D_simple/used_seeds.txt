@@ -1,0 +1,8 @@
+Parameter "random_seed" in config.yaml file under "trainer" category.
+
+Used seeds:
+42
+43
+44
+45
+46

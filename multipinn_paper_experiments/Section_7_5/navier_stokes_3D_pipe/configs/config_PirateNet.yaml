@@ -1,0 +1,50 @@
+problem:
+  name: "navier_stokes_3D_pipe"
+  re: 60
+
+model:
+  type: PirateNet
+  params:
+    hidden_size: 64
+    num_blocks: 2
+    nonlinearity: 0.1
+    gamma: 1.0
+
+model_target:
+  _target_: multipinn.neural_network.${model.type}
+
+regularization:
+  type: AdaptiveConditions
+  params:
+    lr: 1e-3
+
+regularization_target:
+  _target_: multipinn.regularization.${regularization.type}Losses
+
+generator:
+  domain_points: 100_000
+  bound_points: 80_000
+  start_points: 20_000
+  sampler: "pseudo"
+
+trainer:
+  num_epochs: 150_000
+  grid_update: null
+  random_seed: 42
+  calc_loss: "mean"
+
+visualization:
+  grid_plot_points: 5000
+  save_period: 5000
+  save_mode: "html"
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ExponentialLR
+  gamma: 0.9999
+
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.01
+
+paths:
+  save_dir: ${hydra:runtime.cwd}/examples/${problem.name}/artifacts/${model.type}_reg_${regularization.type}_loss_${trainer.calc_loss}_re_${problem.re}
