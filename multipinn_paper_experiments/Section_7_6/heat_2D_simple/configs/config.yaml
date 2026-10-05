@@ -1,0 +1,45 @@
+problem:
+  name: "heat_2D_simple"
+
+model:
+  type: FNN
+  params:
+    hidden_layers: [1024, 1024, 1024, 1024]
+
+model_target:
+  _target_: multipinn.neural_network.${model.type}
+
+regularization:
+  type: Constant
+  params:
+    lambdas: [1, 1, 1, 1]
+
+regularization_target:
+  _target_: multipinn.regularization.${regularization.type}Losses
+
+generator:
+  domain_points: 20_000
+  bound_points: 2_000
+  sampler: "pseudo"
+
+trainer:
+  num_epochs: 20_000
+  grid_update: null
+  random_seed: 42
+  calc_loss: "mean"
+
+visualization:
+  grid_plot_points: 20_000
+  save_period: 2000
+  save_mode: "png"
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ExponentialLR
+  gamma: 0.9999
+
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.001
+
+paths:
+  save_dir: ${hydra:runtime.cwd}/examples/${problem.name}/artifacts/${model.type}_${regularization.type}
