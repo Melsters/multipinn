@@ -139,6 +139,74 @@ class AdaptiveGeneratorRAR_D(AdaptiveGenerator):
         self.points = points
         return points
 
+class AdaptiveGeneratorRAR_D_GrowReplace(AdaptiveGeneratorRAR_D):
+    """Grow to n_points_up_bnd, then replace low-residual old points."""
+
+    def generate(self, condition: Condition, model):
+        if self.n_points_up_bnd < self.n_points:
+            raise ValueError("n_points_up_bnd must be >= initial n_points")
+        if not 0 < self.add_points <= self.density_rec_points_num:
+            raise ValueError(
+                "add_points must be positive and <= density_rec_points_num"
+            )
+
+        if condition.points is None:
+            return super().generate(condition, model)
+
+        old_points = condition.points
+        at_limit = len(old_points) >= self.n_points_up_bnd
+
+        if at_limit:
+            n_new = min(self.add_points, len(old_points))
+        else:
+            n_new = min(
+                self.add_points,
+                self.n_points_up_bnd - len(old_points),
+            )
+
+        density_points, error = self.calc_error_field(
+            condition.geometry, condition, model
+        )
+        chosen_ids = self.sample_from_density(error, n_new)
+        new_points = density_points[chosen_ids].to(old_points).detach()
+
+        if at_limit:
+            if n_new == len(old_points):
+                kept_points = old_points[:0]
+            else:
+                residual_fn = condition.get_residual_fn(model)
+                error_chunks = []
+
+                for chunk in old_points.split(self.density_rec_points_num):
+                    residuals = residual_fn(chunk)
+                    chunk_error = (
+                        torch.stack(residuals, dim=1)
+                        .abs()
+                        .sum(dim=1)
+                        .detach()
+                        .cpu()
+                    )
+                    error_chunks.append(chunk_error)
+
+                old_error = torch.cat(error_chunks).numpy()
+
+                keep_ids = self.sample_min_error(old_error, n_new)
+                keep_ids = torch.as_tensor(
+                    keep_ids, device=old_points.device, dtype=torch.long
+                )
+                kept_points = old_points[keep_ids]
+        else:
+            kept_points = old_points
+
+        points = (
+            torch.cat([new_points, kept_points], dim=0)
+            .detach()
+            .requires_grad_()
+        )
+        points.update = new_points.cpu().numpy()
+        self.points = points
+        return points
+
 
 class AdaptiveGeneratorRAR_G(AdaptiveGenerator):
     def __init__(
