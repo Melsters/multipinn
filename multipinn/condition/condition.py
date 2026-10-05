@@ -56,8 +56,10 @@ class Condition:
         Args:
             i (int): Batch index
         """
-        first_element = i * self.batch_size
-        self.batch_points = self.points[first_element : first_element + self.batch_size]
+        start = i * len(self.points) // self.num_batches
+        end = (i + 1) * len(self.points) // self.num_batches
+        self.batch_points = self.points[start:end]
+        self.batch_size = end - start
 
     def get_residual(self, model) -> List[torch.Tensor]:
         """Compute residuals for current batch.
@@ -97,6 +99,7 @@ class Condition:
         assert (
             self.generator.n_points % num_batches == 0
         ), "Points must divide evenly into batches"
+        self.num_batches = num_batches
         self.batch_size = self.generator.n_points // num_batches
 
     def init_output_len(self, model) -> None:
@@ -183,9 +186,11 @@ class ConditionExtra(Condition):
         Args:
             i (int): Batch index
         """
-        first_element = i * self.batch_size
-        self.batch_points = self.points[first_element : first_element + self.batch_size]
-        self.batch_data = self.data[first_element : first_element + self.batch_size]
+        start = i * len(self.points) // self.num_batches
+        end = (i + 1) * len(self.points) // self.num_batches
+        self.batch_points = self.points[start:end]
+        self.batch_data = self.data[start:end]
+        self.batch_size = end - start
 
     def get_residual(self, model) -> List[torch.Tensor]:
         """Compute residuals using points and auxiliary data.
